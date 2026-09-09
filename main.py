@@ -1,76 +1,62 @@
-import json
-import os
-from dotenv import load_dotenv
 import google.generativeai as genai
+from config import init_gemini
+from memory import load_raw_history, save_raw_history, get_gemini_history
+from tools import available_tools
 
-# 1. Load API Key
-load_dotenv()
-api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+# 1. Inisialisasi Model Aktif (config.py)
+active_model_name = init_gemini()
 
-if not api_key:
-    print("❌ Error: API Key tidak ditemukan di file .env!")
-    exit()
+# 2. Load Memory Percakapan (memory.py)
+history_data = load_raw_history()
+gemini_history = get_gemini_history(history_data)
 
-genai.configure(api_key=api_key)
+# 3. System Instruction & Pengaturan Model dengan Tools Registry
+system_instruction = (
+    "Lu adalah AMBARAWRR AI Agent V2, asisten cerdas, responsif, dan gaul. "
+    "Gunakan bahasa yang santai tapi tetap jelas. "
+    "Kamu memiliki akses ke tools eksekusi fungsi Python. "
+    "Jika pengguna menanyakan waktu/tanggal, selalu gunakan fungsi get_current_time()!"
+)
 
-# 2. Hardcode Model Tercepat (Ganti string ini sesuai nama model yang sukses di terminal lu)
-MODEL_NAME = 'gemini-3.6-flash'
+model = genai.GenerativeModel(
+    model_name=active_model_name,
+    system_instruction=system_instruction,
+    tools=available_tools
+)
 
-# 3. Setup Memori Ringan
-HISTORY_FILE = "history.json"
-history_data = []
+# Enable Automatic Function Calling agar Gemini otomatis memanggil fungsi Python lokal
+chat = model.start_chat(history=gemini_history, enable_automatic_function_calling=True)
 
-if os.path.exists(HISTORY_FILE):
-    try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            history_data = json.load(f)
-    except Exception:
-        history_data = []
+print(f"=== AMBARAWRR AI AGENT V2 ONLINE ===")
+print(f"🤖 Model Aktif : {active_model_name}")
+print(f"🛠️  Tools Registry: {[t.__name__ for t in available_tools]}")
 
-# BATASI MEMORI: Cuma kirim 10 percakapan terakhir biar payload API tetep kencang
-MAX_HISTORY = 10
-recent_history = history_data[-MAX_HISTORY:]
-
-gemini_history = [
-    {"role": item["role"], "parts": [item["content"]]} 
-    for item in recent_history
-]
-
-# 4. Inisialisasi Chat
-model = genai.GenerativeModel(MODEL_NAME)
-chat = model.start_chat(history=gemini_history)
-
-print(f"=== AMBARAWRR AI AGENT V1 ONLINE ({MODEL_NAME}) ===")
-
-# 5. Loop Percakapan Utama
+# 4. Loop Utama Percakapan
 while True:
     pesan_user = input("\nLu: ")
-    
+
     if pesan_user.lower() in ['exit', 'keluar']:
         print("Agent offline. Sampai jumpa!")
         break
-        
+
     if not pesan_user.strip():
         continue
 
-    print("Ambarawrr Agent: ", end="", flush=True)
+    # Indikator visual agar tidak berasa hang
+    print("Ambarawrr Agent: ⏳ Sedang memproses...", end="\r", flush=True)
 
     try:
-        # Stream response langsung tanpa tunda
-        response = chat.send_message(pesan_user, stream=True)
-        full_response = ""
+        # Kirim pesan tanpa stream=True (karena automatic function calling aktif)
+        response = chat.send_message(pesan_user)
         
-        for chunk in response:
-            print(chunk.text, end="", flush=True)
-            full_response += chunk.text
-        print()
+        # Bersihkan baris indikator lalu cetak jawaban akhir
+        print(" " * 40, end="\r") 
+        print(f"Ambarawrr Agent: {response.text}")
 
-        # Update file history.json di latar belakang
+        # Simpan Percakapan ke history.json
         history_data.append({"role": "user", "content": pesan_user})
-        history_data.append({"role": "model", "content": full_response})
-
-        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(history_data, f, indent=2, ensure_ascii=False)
+        history_data.append({"role": "model", "content": response.text})
+        save_raw_history(history_data)
 
     except Exception as e:
         print(f"\n❌ Terjadi kesalahan: {e}")
